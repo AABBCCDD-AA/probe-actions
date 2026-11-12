@@ -1,0 +1,79 @@
+name: ipa
+
+# 这个仓库只是「借一台免费的 macOS 机器」。业务代码不在这个仓库里，
+# 每次构建时用 secret 里的凭据把私有仓库拉下来编译，编译完的产物就是 ipa。
+# 公开的只有这几个步骤，源码不进这里的任何一次提交。
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: '要构建的分支或提交'
+        required: false
+        default: 'codex/flutter-skeleton'
+      build_number:
+        description: '构建号'
+        required: false
+        default: '2026111213'
+
+jobs:
+  ipa:
+    runs-on: macos-26
+    timeout-minutes: 60
+
+    steps:
+      - name: 取私有仓库代码
+        uses: actions/checkout@v4
+        with:
+          repository: AABBCCDD-AA/thinclub-app
+          ref: ${{ inputs.ref }}
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+
+      - name: 记下到底是哪一次提交
+        run: |
+          git log -1 --format='构建基于 %h %ad %s' --date=iso
+
+      - name: 装 Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.9'
+          channel: stable
+          cache: true
+
+      - name: 记下工具链
+        run: |
+          xcodebuild -version
+          flutter --version
+
+      - name: 依赖与本地化
+        run: |
+          flutter pub get
+          flutter gen-l10n
+
+      - name: 出包前闸门
+        run: |
+          dart run tool/audit.dart
+          flutter analyze
+
+      - name: 编译（不签名）
+        run: |
+          flutter build ios --release --no-codesign \
+            --build-number=${{ inputs.build_number }} \
+            --dart-define=API_BASE_URL=https://cloud1-d9gyxm711c78d6823.service.tcloudbase.com/tc
+
+      - name: 按 ipa 规范重新打包
+        run: |
+          cd build/ios/iphoneos
+          rm -rf Payload thinclub-unsigned.ipa
+          mkdir -p Payload
+          cp -r Runner.app Payload/
+          zip -qry thinclub-unsigned.ipa Payload
+          ls -lh thinclub-unsigned.ipa
+
+      - name: 留一份 ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: thinclub-unsigned-ipa
+          path: build/ios/iphoneos/thinclub-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 7
